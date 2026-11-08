@@ -99,6 +99,14 @@ public:
     bool isMoving();
 
     /**
+     * @brief Freeze animation at the current angle (no further spring samples).
+     */
+    void holdCurrent()
+    {
+        stop_motion_at_angle(getCurrentAngle());
+    }
+
+    /**
      * @brief
      *
      * @param enabled
@@ -119,6 +127,11 @@ public:
     void setAutoTorqueReleaseEnabled(bool enabled)
     {
         _auto_torque_release_enabled = enabled;
+    }
+
+    bool getAutoTorqueReleaseEnabled() const
+    {
+        return _auto_torque_release_enabled;
     }
 
     /**

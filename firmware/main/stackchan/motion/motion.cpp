@@ -93,6 +93,12 @@ bool Motion::isMoving()
     return _yaw_servo->isMoving() || _pitch_servo->isMoving();
 }
 
+void Motion::holdCurrent()
+{
+    _yaw_servo->holdCurrent();
+    _pitch_servo->holdCurrent();
+}
+
 int Motion::getCurrentYawAngle()
 {
     return _yaw_servo->getCurrentAngle();
@@ -118,6 +124,11 @@ void Motion::setAutoTorqueReleaseEnabled(bool enabled)
 {
     _yaw_servo->setAutoTorqueReleaseEnabled(enabled);
     _pitch_servo->setAutoTorqueReleaseEnabled(enabled);
+}
+
+bool Motion::getAutoTorqueReleaseEnabled()
+{
+    return _yaw_servo->getAutoTorqueReleaseEnabled();
 }
 
 void Motion::setAutoAngleSyncEnabled(bool enabled)

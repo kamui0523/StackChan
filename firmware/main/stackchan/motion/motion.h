@@ -149,11 +149,13 @@ public:
     void lookAtPoint(float x, float y, float z, int speed = 500);
 
     bool isMoving();
+    void holdCurrent();
     uitk::Vector2i getCurrentAngles();
     int getCurrentYawAngle();
     int getCurrentPitchAngle();
     void setTorqueEnabled(bool enabled);
     void setAutoTorqueReleaseEnabled(bool enabled);
+    bool getAutoTorqueReleaseEnabled();
     void setAutoAngleSyncEnabled(bool enabled);
 
     void setModifyLock(bool locked);

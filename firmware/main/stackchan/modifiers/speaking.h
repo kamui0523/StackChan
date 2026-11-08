@@ -61,8 +61,8 @@ public:
         }
 
         if (_enable_motion && now >= _next_motion_tick) {
-            // Overlapping retargets keep the spring moving continuously.
-            _next_motion_tick = now + 280;
+            // 800ms retargets: fewer UART bursts while keeping some head life.
+            _next_motion_tick = now + _motion_interval_ms;
             perform_smooth_speaking_motion(stackchan);
         }
     }
@@ -98,7 +98,7 @@ private:
             return;
         }
 
-        _phase_ms += 280;
+        _phase_ms += _motion_interval_ms;
         const float t = static_cast<float>(_phase_ms) * 0.001f;
 
         // Smooth Lissajous-style wander around the pose at speech start.
@@ -117,6 +117,9 @@ private:
     const int _open_max_weight  = 80;
     const int _close_min_weight = 0;
     const int _close_max_weight = 20;
+
+    // Only interval changed vs prior lively motion (was 280ms).
+    static constexpr uint32_t _motion_interval_ms = 800;
 
     uint32_t _destroy_at       = 0;
     uint32_t _next_mouth_tick  = 0;
