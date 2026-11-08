@@ -2,75 +2,7 @@ diff --git a/main/application.cc b/main/application.cc
 index 31de205..50096d8 100644
 --- a/main/application.cc
 +++ b/main/application.cc
-@@ -1,4 +1,5 @@
- #include "application.h"
-+#include <hal/hal.h>
- #include "assets.h"
- #include "assets/lang_config.h"
- #include "audio_codec.h"
-@@ -442,6 +443,7 @@ void Application::CheckAssetsVersion() {
- void Application::CheckNewVersion() {
-     const int MAX_RETRY = 10;
-     int retry_count = 0;
-+    int challenge_rounds = 0;
-     int retry_delay = 10;  // Initial retry delay in seconds
- 
-     auto& board = Board::GetInstance();
-@@ -499,15 +501,18 @@ void Application::CheckNewVersion() {
- 
-         // No new version, mark the current version as valid
-         ota_->MarkCurrentVersionValid();
--        if (!ota_->HasActivationCode() && !ota_->HasActivationChallenge()) {
-+        if (ota_->RequiresAppBinding()) {
-+            GetHAL().requestAppSetup();
-+        }
-+        if (!ota_->HasActivationChallenge()) {
-             // Exit the loop if done checking new version
-             break;
-         }
- 
-         display->SetStatus(Lang::Strings::ACTIVATION);
--        // Activation code is shown to the user and waiting for the user to input
--        if (ota_->HasActivationCode()) {
--            ShowActivationCode(ota_->GetActivationCode(), ota_->GetActivationMessage());
-+        // Keep automatic device authentication bounded; manual binding uses the App.
-+        if (++challenge_rounds > 3) {
-+            GetHAL().requestAppSetup();
-         }
- 
-         // This will block the loop until the activation is done or timeout
-@@ -725,30 +730,6 @@ void Application::InitializeProtocol() {
-     protocol_->Start();
- }
- 
--void Application::ShowActivationCode(const std::string& code, const std::string& message) {
--    struct digit_sound {
--        char digit;
--        const std::string_view& sound;
--    };
--    static const std::array<digit_sound, 10> digit_sounds{
--        {digit_sound{'0', Lang::Sounds::OGG_0}, digit_sound{'1', Lang::Sounds::OGG_1},
--         digit_sound{'2', Lang::Sounds::OGG_2}, digit_sound{'3', Lang::Sounds::OGG_3},
--         digit_sound{'4', Lang::Sounds::OGG_4}, digit_sound{'5', Lang::Sounds::OGG_5},
--         digit_sound{'6', Lang::Sounds::OGG_6}, digit_sound{'7', Lang::Sounds::OGG_7},
--         digit_sound{'8', Lang::Sounds::OGG_8}, digit_sound{'9', Lang::Sounds::OGG_9}}};
--
--    // This sentence uses 9KB of SRAM, so we need to wait for it to finish
--    Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
--
--    for (const auto& digit : code) {
--        auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
--                               [digit](const digit_sound& ds) { return ds.digit == digit; });
--        if (it != digit_sounds.end()) {
--            audio_service_.PlaySound(it->sound);
--        }
--    }
--}
--
- void Application::Alert(const char* status, const char* message, const char* emotion,
-                         const std::string_view& sound) {
-     ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
-@@ -833,6 +814,7 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
+@@ -833,6 +833,7 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
          if (!protocol_->OpenAudioChannel()) {
              // Return to idle so the device is not stuck in the connecting
              // state (not every failure path reports a network error)
@@ -78,7 +10,7 @@ index 31de205..50096d8 100644
              SetDeviceState(kDeviceStateIdle);
              return;
          }
-@@ -970,6 +952,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
+@@ -970,6 +970,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
              // Return to idle so the device is not stuck in the connecting
              // state (not every failure path reports a network error), and
              // wake word detection is re-enabled by the idle state handler.
@@ -86,18 +18,6 @@ index 31de205..50096d8 100644
              SetDeviceState(kDeviceStateIdle);
              return;
          }
-diff --git a/main/application.h b/main/application.h
-index f2b9a00..68f01d1 100644
---- a/main/application.h
-+++ b/main/application.h
-@@ -180,7 +180,6 @@ private:
-     void CheckAssetsVersion();
-     void CheckNewVersion();
-     void InitializeProtocol();
--    void ShowActivationCode(const std::string& code, const std::string& message);
-     void SetListeningMode(ListeningMode mode);
-     ListeningMode GetDefaultListeningMode() const;
-     
 diff --git a/main/boards/common/esp_video.cc b/main/boards/common/esp_video.cc
 index 2f31a49..4cf6f63 100644
 --- a/main/boards/common/esp_video.cc
@@ -538,63 +458,3 @@ index 4b034b4..1028e73 100644
      virtual ~CoreS3AudioCodec();
  
      virtual void SetOutputVolume(int volume) override;
-diff --git a/main/ota.cc b/main/ota.cc
-index 124d333..5d0c002 100644
---- a/main/ota.cc
-+++ b/main/ota.cc
-@@ -132,19 +132,12 @@ NetworkResult<> Ota::CheckVersion() {
-         return std::unexpected(NetworkError::ProtocolError());
-     }
- 
--    has_activation_code_ = false;
-+    requires_app_binding_ = false;
-     has_activation_challenge_ = false;
-     cJSON *activation = cJSON_GetObjectItem(root, "activation");
-     if (cJSON_IsObject(activation)) {
--        cJSON* message = cJSON_GetObjectItem(activation, "message");
--        if (cJSON_IsString(message)) {
--            activation_message_ = message->valuestring;
--        }
--        cJSON* code = cJSON_GetObjectItem(activation, "code");
--        if (cJSON_IsString(code)) {
--            activation_code_ = code->valuestring;
--            has_activation_code_ = true;
--        }
-+        // Discard community codes and URL messages; StackChan World handles binding.
-+        requires_app_binding_ = cJSON_IsString(cJSON_GetObjectItem(activation, "code"));
-         cJSON* challenge = cJSON_GetObjectItem(activation, "challenge");
-         if (cJSON_IsString(challenge)) {
-             activation_challenge_ = challenge->valuestring;
-diff --git a/main/ota.h b/main/ota.h
-index eda3fd7..ce17ee5 100644
---- a/main/ota.h
-+++ b/main/ota.h
-@@ -21,7 +21,7 @@ public:
-     bool HasNewVersion() { return has_new_version_; }
-     bool HasMqttConfig() { return has_mqtt_config_; }
-     bool HasWebsocketConfig() { return has_websocket_config_; }
--    bool HasActivationCode() { return has_activation_code_; }
-+    bool RequiresAppBinding() { return requires_app_binding_; }
-     bool HasServerTime() { return has_server_time_; }
-     bool StartUpgrade(std::function<void(int progress, size_t speed)> callback);
-     static bool Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback);
-@@ -30,18 +30,14 @@ public:
-     const std::string& GetFirmwareVersion() const { return firmware_version_; }
-     const std::string& GetCurrentVersion() const { return current_version_; }
-     const std::string& GetFirmwareUrl() const { return firmware_url_; }
--    const std::string& GetActivationMessage() const { return activation_message_; }
--    const std::string& GetActivationCode() const { return activation_code_; }
-     std::string GetCheckVersionUrl();
- 
- private:
--    std::string activation_message_;
--    std::string activation_code_;
-     bool has_new_version_ = false;
-     bool has_mqtt_config_ = false;
-     bool has_websocket_config_ = false;
-     bool has_server_time_ = false;
--    bool has_activation_code_ = false;
-+    bool requires_app_binding_ = false;
-     bool has_serial_number_ = false;
-     bool has_activation_challenge_ = false;
-     std::string current_version_;

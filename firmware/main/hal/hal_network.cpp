@@ -9,6 +9,7 @@
 #include <mooncake_log.h>
 #include <wifi_manager.h>
 #include <board.h>
+#include <settings.h>
 #include <mutex>
 #include <queue>
 #include <vector>
@@ -49,18 +50,23 @@ void Hal::startNetwork(std::function<void(std::string_view)> onLog)
     // the active station again emits no new Connected event, so reuse it.
     if (WifiManager::GetInstance().IsConnected()) {
         mclog::tagInfo(_tag, "network already connected");
+        {
+            Settings settings("app_config", true);
+            settings.SetBool("is_configed", true);
+        }
         startSntp();
         return;
     }
 
     std::atomic<bool> network_connected = false;
-    std::atomic<bool> setup_required    = false;
+    std::atomic<bool> in_config_mode    = false;
+    bool timeout_logged                 = false;
 
     auto& board = Board::GetInstance();
     mclog::tagInfo(_tag, "start and wait for network connected...");
 
     board.SetNetworkEventCallback(
-        [&network_connected, &setup_required, &onLog](NetworkEvent event, const std::string& data) {
+        [&network_connected, &in_config_mode, &onLog](NetworkEvent event, const std::string& data) {
             switch (event) {
                 case NetworkEvent::Scanning:
                     if (onLog) {
@@ -86,10 +92,15 @@ void Hal::startNetwork(std::function<void(std::string_view)> onLog)
                 case NetworkEvent::Disconnected:
                     break;
                 case NetworkEvent::WifiConfigModeEnter:
-                    setup_required = true;
+                    // SoftAP hotspot is active — wait for the user to provision WiFi.
+                    // Do not reboot into BLE App setup.
+                    in_config_mode = true;
+                    if (onLog) {
+                        onLog("Connect to the SoftAP hotspot and open the config page in a browser.");
+                    }
                     break;
                 case NetworkEvent::WifiConfigModeExit:
-                    // WiFi config mode exit is handled by WifiBoard internally
+                    in_config_mode = false;
                     break;
                 // Cellular modem specific events
                 case NetworkEvent::ModemDetecting:
@@ -108,18 +119,22 @@ void Hal::startNetwork(std::function<void(std::string_view)> onLog)
     board.StartNetwork();
 
     while (!network_connected && !WifiManager::GetInstance().IsConnected()) {
-        // WifiBoard normally handles a 60s timeout. Keep this caller bounded
-        // even if station startup or the board timer fails to emit an event.
-        if (setup_required || uint32_t(millis() - started_at) >= 65000) {
-            board.SetNetworkEventCallback(nullptr);
-            if (onLog) {
-                onLog("WiFi unavailable. Open StackChan World to set up WiFi.");
+        const bool config_mode = in_config_mode || WifiManager::GetInstance().IsConfigMode();
+        // While SoftAP is up, wait indefinitely for the user to finish provisioning.
+        // Only log once if station connect times out before SoftAP starts.
+        if (!config_mode && uint32_t(millis() - started_at) >= 65000) {
+            if (onLog && !timeout_logged) {
+                onLog("WiFi unavailable. Connect to the SoftAP hotspot and configure WiFi in a browser.");
+                timeout_logged = true;
             }
-            requestAppSetup();
         }
         GetHAL().delay(50);
     }
     mclog::tagInfo(_tag, "network connected");
+    {
+        Settings settings("app_config", true);
+        settings.SetBool("is_configed", true);
+    }
     board.SetNetworkEventCallback(nullptr);
 
     startSntp();

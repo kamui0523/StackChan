@@ -28,11 +28,13 @@ void AppLauncher::onLauncherOpen()
     LvglLockGuard lock;
 
     if (!_startup_checked && GetHAL().consumeAppSetupRequest()) {
-        mclog::tagInfo(getAppInfo().name, "resume App setup after network/binding failure");
-        _startup_worker = std::make_unique<setup_workers::WifiSetupWorker>();
+        mclog::tagInfo(getAppInfo().name, "network setup requested; starting Xiaozhi SoftAP provisioning");
+        _startup_checked = true;
+        GetHAL().requestXiaozhiStart();
     } else if (!_startup_checked && !GetHAL().isAppConfiged()) {
-        mclog::tagInfo(getAppInfo().name, "app not configured, start startup worker");
-        _startup_worker = std::make_unique<setup_workers::StartupWorker>();
+        mclog::tagInfo(getAppInfo().name, "app not configured; starting Xiaozhi SoftAP provisioning");
+        _startup_checked = true;
+        GetHAL().requestXiaozhiStart();
     } else {
         create_launcher_view();
     }
@@ -49,7 +51,7 @@ void AppLauncher::onLauncherRunning()
             _startup_checked = true;
             create_launcher_view();
         }
-    } else {
+    } else if (_view) {
         _view->update();
         screensaver_update();
     }

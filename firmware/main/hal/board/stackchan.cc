@@ -690,12 +690,27 @@ public:
         GetBacklight()->RestoreBrightness();
     }
 
-    // All fallback paths (no saved SSID, timeout, explicit reconfiguration) use
-    // the same BLE App setup flow. Never start the upstream configuration AP.
+    // SoftAP / web hotspot provisioning (upstream WifiBoard path).
     void StartWifiConfigMode() override
     {
-        ESP_LOGW(TAG, "WiFi setup required; opening StackChan App setup");
-        GetHAL().requestAppSetup();
+        ESP_LOGI(TAG, "Starting SoftAP WiFi provisioning");
+        WifiBoard::StartWifiConfigMode();
+    }
+
+    // Mark StackChan app as configured once WiFi connects (SoftAP or saved SSID),
+    // so the next boot does not fall back to the BLE first-boot flow.
+    void SetNetworkEventCallback(NetworkEventCallback callback) override
+    {
+        WifiBoard::SetNetworkEventCallback(
+            [callback = std::move(callback)](NetworkEvent event, const std::string& data) {
+                if (event == NetworkEvent::Connected) {
+                    Settings settings("app_config", true);
+                    settings.SetBool("is_configed", true);
+                }
+                if (callback) {
+                    callback(event, data);
+                }
+            });
     }
 
     virtual AudioCodec* GetAudioCodec() override
