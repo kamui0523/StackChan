@@ -32,3 +32,27 @@ ctest --test-dir build-host-tests --output-on-failure
 ```bash
 idf.py flash
 ```
+
+## Speech subtitles (说话字幕开关)
+
+Compile-time switch for the on-screen TTS speech bubble while the robot is speaking.
+Face / mouth animation still runs when subtitles are off.
+
+**menuconfig**
+
+```bash
+idf.py menuconfig
+```
+
+Go to **StackChan Display** → **Show speech subtitles while speaking**, then rebuild and flash.
+
+**sdkconfig / sdkconfig.defaults**
+
+- Enable: `CONFIG_STACKCHAN_SPEECH_SUBTITLES=y`
+- Disable: `# CONFIG_STACKCHAN_SPEECH_SUBTITLES is not set`
+
+## Update history
+
+- **Speech subtitles switch**: added `CONFIG_STACKCHAN_SPEECH_SUBTITLES` under menuconfig
+  `StackChan Display`, so speaking captions can be turned on/off without editing code
+  (rebuild + flash after changing).

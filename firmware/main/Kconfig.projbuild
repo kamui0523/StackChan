@@ -11,6 +11,17 @@ config STACKCHAN_SERVER_URL
 
 endmenu
 
+menu "StackChan Display"
+
+config STACKCHAN_SPEECH_SUBTITLES
+    bool "Show speech subtitles while speaking"
+    default y
+    help
+        When enabled, assistant TTS text appears in the on-screen speech bubble.
+        Disable for face-only speaking (no captions). Rebuild/flash to toggle.
+
+endmenu
+
 menu "Xiaozhi Assistant"
 
 config OTA_URL

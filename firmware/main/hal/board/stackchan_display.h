@@ -9,6 +9,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_timer.h>
 #include <memory>
+#include <string>
 
 class StackChanAvatarDisplay : public LvglDisplay {
 private:
@@ -19,13 +20,27 @@ private:
     int idle_expression_modifier_id_    = -1;
     int blink_modifier_id_              = -1;
     bool is_sleeping_                   = false;
+    bool is_speaking_session_           = false;  // tts start..stop
+    bool is_speaking_presentation_      = false;  // first sentence / audio-aligned UI
+    bool is_waiting_response_           = false;
     uint8_t idle_motion_level_          = 2;
+    std::string pending_emotion_;
+    std::string pending_assistant_chat_;
+    bool has_pending_emotion_           = false;
+    bool has_pending_assistant_chat_    = false;
 
     lv_obj_t* preview_image_                         = nullptr;
     esp_timer_handle_t preview_timer_                = nullptr;
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
 
     void CreateIdleMotionModifier();
+    void ApplyEmotionNow(const char* emotion);
+    void ShowThinkingExpression();
+    void ClearPendingExpressionState();
+    void FlushPendingForSpeaking();
+    void ResyncBlinkModifier();
+    void StopSpeakingModifier();
+    void BeginSpeakingPresentation();
 
 protected:
     virtual bool Lock(int timeout_ms = 0) override;

@@ -318,6 +318,141 @@ void StackChanAvatarDisplay::CreateIdleMotionModifier()
     }
 }
 
+void StackChanAvatarDisplay::ResyncBlinkModifier()
+{
+    auto& stackchan     = GetStackChan();
+    auto blink_modifier = static_cast<BlinkModifier*>(stackchan.getModifier(blink_modifier_id_));
+    if (blink_modifier) {
+        blink_modifier->resyncEyeWeights();
+    }
+}
+
+void StackChanAvatarDisplay::StopSpeakingModifier()
+{
+    auto& stackchan = GetStackChan();
+    if (speaking_modifier_id_ >= 0) {
+        stackchan.removeModifier(speaking_modifier_id_);
+        speaking_modifier_id_ = -1;
+    }
+    if (stackchan.hasAvatar()) {
+        stackchan.avatar().mouth().setWeight(0);
+    }
+    // Restore default servo control policy after speech.
+    stackchan.motion().setAutoAngleSyncEnabled(true);
+    stackchan.motion().setAutoTorqueReleaseEnabled(true);
+    is_speaking_presentation_ = false;
+}
+
+void StackChanAvatarDisplay::BeginSpeakingPresentation()
+{
+    auto& stackchan = GetStackChan();
+    if (!stackchan.hasAvatar()) {
+        return;
+    }
+
+    FlushPendingForSpeaking();
+
+    if (speaking_modifier_id_ < 0) {
+        speaking_modifier_id_ = stackchan.addModifier(std::make_unique<SpeakingModifier>(0, 160, true));
+    }
+    is_speaking_presentation_ = true;
+}
+
+void StackChanAvatarDisplay::ShowThinkingExpression()
+{
+    auto& stackchan = GetStackChan();
+    if (!stackchan.hasAvatar()) {
+        return;
+    }
+
+    auto& avatar = stackchan.avatar();
+    avatar.clearSpeech();
+    avatar.setEmotion(Emotion::Doubt);
+    // Thinking look: glance aside, slight mouth tilt — no "..." bubble.
+    avatar.leftEye().setPosition({18, -8});
+    avatar.rightEye().setPosition({18, -8});
+    avatar.mouth().setWeight(8);
+    avatar.mouth().setRotation(3580);
+    ResyncBlinkModifier();
+}
+
+void StackChanAvatarDisplay::ClearPendingExpressionState()
+{
+    pending_emotion_.clear();
+    pending_assistant_chat_.clear();
+    has_pending_emotion_        = false;
+    has_pending_assistant_chat_ = false;
+}
+
+void StackChanAvatarDisplay::FlushPendingForSpeaking()
+{
+    if (has_pending_emotion_) {
+        ApplyEmotionNow(pending_emotion_.c_str());
+        pending_emotion_.clear();
+        has_pending_emotion_ = false;
+    }
+
+#if CONFIG_STACKCHAN_SPEECH_SUBTITLES
+    if (has_pending_assistant_chat_) {
+        GetStackChan().avatar().setSpeech(pending_assistant_chat_);
+        pending_assistant_chat_.clear();
+        has_pending_assistant_chat_ = false;
+    }
+#else
+    pending_assistant_chat_.clear();
+    has_pending_assistant_chat_ = false;
+#endif
+}
+
+void StackChanAvatarDisplay::ApplyEmotionNow(const char* emotion)
+{
+    auto& stackchan = GetStackChan();
+    if (!stackchan.hasAvatar() || !emotion) {
+        return;
+    }
+
+    auto& avatar = stackchan.avatar();
+
+    if (strcmp(emotion, "neutral") == 0) {
+        avatar.setEmotion(Emotion::Neutral);
+        is_sleeping_ = false;
+    } else if (strcmp(emotion, "happy") == 0 || strcmp(emotion, "laughing") == 0) {
+        avatar.setEmotion(Emotion::Happy);
+        is_sleeping_ = false;
+    } else if (strcmp(emotion, "angry") == 0) {
+        avatar.setEmotion(Emotion::Angry);
+        is_sleeping_ = false;
+    } else if (strcmp(emotion, "sad") == 0 || strcmp(emotion, "crying") == 0) {
+        avatar.setEmotion(Emotion::Sad);
+        is_sleeping_ = false;
+    } else if (strcmp(emotion, "sleepy") == 0) {
+        avatar.setEmotion(Emotion::Sleepy);
+        avatar.setSpeech("Zzz…");
+        is_sleeping_ = true;
+
+        ESP_LOGW(TAG, "Stop idle motion");
+        if (idle_motion_modifier_id_ >= 0) {
+            stackchan.removeModifier(idle_motion_modifier_id_);
+            idle_motion_modifier_id_ = -1;
+        }
+        if (idle_expression_modifier_id_ >= 0) {
+            stackchan.removeModifier(idle_expression_modifier_id_);
+            idle_expression_modifier_id_ = -1;
+        }
+
+        stackchan.motion().pitchServo().moveWithSpeed(0, 80);
+    } else if (strcmp(emotion, "doubtful") == 0) {
+        avatar.setEmotion(Emotion::Doubt);
+        is_sleeping_ = false;
+    } else {
+        ESP_LOGW(TAG, "Unknown emotion: %s, using NEUTRAL", emotion);
+        avatar.setEmotion(Emotion::Neutral);
+        is_sleeping_ = false;
+    }
+
+    ResyncBlinkModifier();
+}
+
 void StackChanAvatarDisplay::SetEmotion(const char* emotion)
 {
     auto& stackchan = GetStackChan();
@@ -328,54 +463,30 @@ void StackChanAvatarDisplay::SetEmotion(const char* emotion)
 
     DisplayLockGuard lock(this);
 
-    // ESP_LOGE(TAG, "SetEmotion: %s", emotion);
+    const bool is_system_emotion =
+        strcmp(emotion, "neutral") == 0 || strcmp(emotion, "sleepy") == 0 || strcmp(emotion, "robot_2") == 0;
 
-    auto& avatar = stackchan.avatar();
-
-    // Map emotion string to stackchan::Emotion
-    if (strcmp(emotion, "neutral") == 0) {
-        avatar.setEmotion(Emotion::Neutral);
-    } else if (strcmp(emotion, "happy") == 0) {
-        avatar.setEmotion(Emotion::Happy);
-    } else if (strcmp(emotion, "laughing") == 0) {
-        avatar.setEmotion(Emotion::Happy);
-    } else if (strcmp(emotion, "angry") == 0) {
-        avatar.setEmotion(Emotion::Angry);
-    } else if (strcmp(emotion, "sad") == 0) {
-        avatar.setEmotion(Emotion::Sad);
-    } else if (strcmp(emotion, "crying") == 0) {
-        avatar.setEmotion(Emotion::Sad);
-    } else if (strcmp(emotion, "sleepy") == 0) {
-        avatar.setEmotion(Emotion::Sleepy);
-        avatar.setSpeech("Zzz…");
-        is_sleeping_ = true;
-        // avatar.mouth().setWeight(10);
-
-        // Stop idle motion
-        ESP_LOGW(TAG, "Stop idle motion");
-        if (idle_motion_modifier_id_ >= 0) {
-            stackchan.removeModifier(idle_motion_modifier_id_);
-            idle_motion_modifier_id_ = -1;
-            stackchan.removeModifier(idle_expression_modifier_id_);
-            idle_expression_modifier_id_ = -1;
-        }
-
-        // Return to default pose
-        auto& motion = GetStackChan().motion();
-        motion.pitchServo().moveWithSpeed(0, 80);
-
-    } else if (strcmp(emotion, "doubtful") == 0) {
-        avatar.setEmotion(Emotion::Doubt);
-    } else {
-        ESP_LOGW(TAG, "Unknown emotion: %s, using NEUTRAL", emotion);
-        avatar.setEmotion(Emotion::Neutral);
+    // LLM emotion / TTS start both arrive before audible audio. Hold expressive
+    // emotions until the first sentence_start (BeginSpeakingPresentation).
+    if (!is_speaking_presentation_ && !is_system_emotion) {
+        pending_emotion_     = emotion;
+        has_pending_emotion_ = true;
+        ShowThinkingExpression();
+        return;
     }
 
-    // Resync blink modifier base eye weights
-    auto blink_modifier = static_cast<BlinkModifier*>(stackchan.getModifier(blink_modifier_id_));
-    if (blink_modifier) {
-        blink_modifier->resyncEyeWeights();
+    if (!is_speaking_presentation_ && (is_waiting_response_ || is_speaking_session_) &&
+        strcmp(emotion, "neutral") == 0) {
+        ShowThinkingExpression();
+        return;
     }
+
+    if (is_system_emotion) {
+        has_pending_emotion_ = false;
+        pending_emotion_.clear();
+    }
+
+    ApplyEmotionNow(emotion);
 }
 
 void StackChanAvatarDisplay::SetChatMessage(const char* role, const char* content)
@@ -385,18 +496,48 @@ void StackChanAvatarDisplay::SetChatMessage(const char* role, const char* conten
     }
 
     auto& stackchan = GetStackChan();
-    if (!stackchan.hasAvatar()) {
+    if (!stackchan.hasAvatar() || !role) {
         return;
     }
 
-    // ESP_LOGE(TAG, "SetChatMessage: role=%s, content=%s", role ? role : "null", content ? content : "null");
-
     DisplayLockGuard lock(this);
 
+    const char* text = content ? content : "";
+
     if (strcmp(role, "system") == 0) {
-        stackchan.avatar().setSpeech(content);
-    } else if (strcmp(role, "assistant") == 0) {
-        stackchan.avatar().setSpeech(content);
+        // Don't wipe the thinking bubble while waiting for a reply.
+        if ((is_waiting_response_ || is_speaking_session_) && text[0] == '\0') {
+            return;
+        }
+        stackchan.avatar().setSpeech(text);
+        return;
+    }
+
+    if (strcmp(role, "assistant") == 0) {
+        // sentence_start is the closest UI signal to actual spoken audio.
+        if (is_speaking_session_) {
+            if (!is_speaking_presentation_) {
+#if CONFIG_STACKCHAN_SPEECH_SUBTITLES
+                pending_assistant_chat_     = text;
+                has_pending_assistant_chat_ = true;
+#endif
+                BeginSpeakingPresentation();
+            }
+#if CONFIG_STACKCHAN_SPEECH_SUBTITLES
+            else {
+                stackchan.avatar().setSpeech(text);
+            }
+#endif
+            return;
+        }
+
+#if CONFIG_STACKCHAN_SPEECH_SUBTITLES
+        pending_assistant_chat_     = text;
+        has_pending_assistant_chat_ = true;
+#endif
+        if (is_waiting_response_ || has_pending_emotion_ || text[0] != '\0') {
+            ShowThinkingExpression();
+        }
     }
 }
 
@@ -409,6 +550,8 @@ void StackChanAvatarDisplay::ClearChatMessages()
 
     DisplayLockGuard lock(this);
 
+    has_pending_assistant_chat_ = false;
+    pending_assistant_chat_.clear();
     stackchan.avatar().clearSpeech();
 
     ESP_LOGI(TAG, "Chat messages cleared");
@@ -488,20 +631,17 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
     }
 
     auto& avatar = stackchan.avatar();
-    auto& motion = stackchan.motion();
 
     DisplayLockGuard lock(this);
 
-    bool is_idle      = false;
-    bool is_listening = false;
+    bool is_idle = false;
 
     if (strcmp(status, Lang::Strings::LISTENING) == 0) {
-        if (speaking_modifier_id_ >= 0) {
-            // Start speaking
-            stackchan.removeModifier(speaking_modifier_id_);
-            avatar.mouth().setWeight(0);
-            speaking_modifier_id_ = -1;
-        }
+        is_speaking_session_      = false;
+        is_speaking_presentation_ = false;
+        is_waiting_response_      = false;
+        ClearPendingExpressionState();
+        StopSpeakingModifier();
 
         GetHAL().setRgbColor(0, 0, 50, 0);
         GetHAL().refreshRgb();
@@ -509,12 +649,11 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
     } else if (strcmp(status, Lang::Strings::STANDBY) == 0) {
         _is_xiaozhi_ready = true;
 
-        if (speaking_modifier_id_ >= 0) {
-            // Stop speaking
-            stackchan.removeModifier(speaking_modifier_id_);
-            avatar.mouth().setWeight(0);
-            speaking_modifier_id_ = -1;
-        }
+        is_speaking_session_      = false;
+        is_speaking_presentation_ = false;
+        is_waiting_response_      = false;
+        ClearPendingExpressionState();
+        StopSpeakingModifier();
 
         is_idle = true;
 
@@ -522,49 +661,61 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
         GetHAL().refreshRgb();
 
     } else if (strcmp(status, Lang::Strings::SPEAKING) == 0) {
-        if (speaking_modifier_id_ < 0) {
-            speaking_modifier_id_ = stackchan.addModifier(std::make_unique<SpeakingModifier>(0, 180, false));
+        // tts start arrives before decoded PCM reaches the speaker. Keep the
+        // thinking face until sentence_start kicks BeginSpeakingPresentation().
+        is_speaking_session_ = true;
+        is_waiting_response_ = false;
+        if (!is_speaking_presentation_) {
+            ShowThinkingExpression();
         }
 
         GetHAL().setRgbColor(0, 0, 0, 50);
         GetHAL().refreshRgb();
+
+    } else if (strcmp(status, Lang::Strings::CONNECTING) == 0) {
+        is_speaking_session_      = false;
+        is_speaking_presentation_ = false;
+        is_waiting_response_      = true;
+        StopSpeakingModifier();
+        ShowThinkingExpression();
+
+    } else if (strcmp(status, Lang::Strings::CHECKING_NEW_VERSION) == 0 ||
+               strcmp(status, Lang::Strings::OTA_UPGRADE) == 0) {
+        // Custom StackChan firmware: never surface OTA check / upgrade UI.
+        return;
+
     } else {
+        is_speaking_session_      = false;
+        is_speaking_presentation_ = false;
+        is_waiting_response_      = false;
         avatar.setSpeech(status);
     }
 
     if (is_idle) {
-        // Start idle motion
-        ESP_LOGW(TAG, "Start idle motion");
-        if (idle_motion_modifier_id_ < 0) {
-            if (idle_motion_level_ > 0) {
-                CreateIdleMotionModifier();
-            }
+        // Face-only idle micro-expression. Servo idle roam is disabled so the
+        // head only moves while speaking.
+        ESP_LOGW(TAG, "Start idle expression");
+        if (idle_motion_modifier_id_ >= 0) {
+            stackchan.removeModifier(idle_motion_modifier_id_);
+            idle_motion_modifier_id_ = -1;
+        }
+        if (idle_expression_modifier_id_ < 0) {
             idle_expression_modifier_id_ = stackchan.addModifier(std::make_unique<IdleExpressionModifier>());
         }
 
         _is_xiaozhi_idle = true;
     } else {
-        // Stop idle motion
-        ESP_LOGW(TAG, "Stop idle motion");
+        ESP_LOGW(TAG, "Stop idle expression");
         if (idle_motion_modifier_id_ >= 0) {
             stackchan.removeModifier(idle_motion_modifier_id_);
             idle_motion_modifier_id_ = -1;
+        }
+        if (idle_expression_modifier_id_ >= 0) {
             stackchan.removeModifier(idle_expression_modifier_id_);
             idle_expression_modifier_id_ = -1;
         }
 
-        // if (!is_listening) {
-        //     // Return to default pose
-        //     motion.pitchServo().moveWithSpeed(200, 350);
-        //     motion.yawServo().moveWithSpeed(0, 350);
-        // }
-
         _is_xiaozhi_idle = false;
-    }
-
-    // Clear sleep state
-    if (is_sleeping_) {
-        avatar.setSpeech("");
     }
 }
 
