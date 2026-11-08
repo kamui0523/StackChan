@@ -166,6 +166,7 @@ static void _stackchan_update_task(void* param)
         if (!is_setup_done) {
             // Setup when xiaozhi ready
             GetHAL().startSntp();
+            // Swipe-up returns to Mooncake launcher (Setup / other apps).
             view::create_home_indicator([]() { GetHAL().requestWarmReboot(0); }, 0x81DBBD, 0x134233);
             view::create_status_bar(0x81DBBD, 0x134233);
             is_setup_done = true;
@@ -179,6 +180,9 @@ static void _stackchan_update_task(void* param)
 void Hal::startXiaozhi()
 {
     mclog::tagInfo(_tag, "start xiaozhi");
+
+    // Ensure sticky warm-boot NVS cannot bounce the next power-on into launcher.
+    clearWarmRebootRequest();
 
     auto& motion = GetStackChan().motion();
     motion.setAutoAngleSyncEnabled(true);

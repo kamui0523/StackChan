@@ -1,8 +1,45 @@
 diff --git a/main/application.cc b/main/application.cc
-index 31de205..50096d8 100644
+index 31de205..25ead4f 100644
 --- a/main/application.cc
 +++ b/main/application.cc
-@@ -833,6 +833,7 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
+@@ -440,6 +440,9 @@ void Application::CheckAssetsVersion() {
+ }
+ 
+ void Application::CheckNewVersion() {
++    // StackChan ships a custom firmware image. Boot-time remote firmware upgrade
++    // checks are skipped; we still hit the OTA endpoint for protocol config and
++    // activation codes.
+     const int MAX_RETRY = 10;
+     int retry_count = 0;
+     int retry_delay = 10;  // Initial retry delay in seconds
+@@ -447,7 +450,7 @@ void Application::CheckNewVersion() {
+     auto& board = Board::GetInstance();
+     while (true) {
+         auto display = board.GetDisplay();
+-        display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
++        // Do not show "Checking for new version..." on this custom build.
+ 
+         auto check = ota_->CheckVersion();
+         if (!check) {
+@@ -491,13 +494,12 @@ void Application::CheckNewVersion() {
+         retry_delay = 10;  // Reset retry delay
+ 
+         if (ota_->HasNewVersion()) {
+-            if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
+-                return;  // This line will never be reached after reboot
+-            }
+-            // If upgrade failed, continue to normal operation
++            ESP_LOGW(TAG,
++                     "Ignoring remote firmware %s on StackChan custom build (url=%s)",
++                     ota_->GetFirmwareVersion().c_str(), ota_->GetFirmwareUrl().c_str());
+         }
+ 
+-        // No new version, mark the current version as valid
++        // Mark the current version as valid
+         ota_->MarkCurrentVersionValid();
+         if (!ota_->HasActivationCode() && !ota_->HasActivationChallenge()) {
+             // Exit the loop if done checking new version
+@@ -833,6 +835,7 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
          if (!protocol_->OpenAudioChannel()) {
              // Return to idle so the device is not stuck in the connecting
              // state (not every failure path reports a network error)
@@ -10,7 +47,7 @@ index 31de205..50096d8 100644
              SetDeviceState(kDeviceStateIdle);
              return;
          }
-@@ -970,6 +970,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
+@@ -970,6 +973,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
              // Return to idle so the device is not stuck in the connecting
              // state (not every failure path reports a network error), and
              // wake word detection is re-enabled by the idle state handler.

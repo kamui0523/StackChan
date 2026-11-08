@@ -27,6 +27,10 @@ void AppLauncher::onLauncherOpen()
 
     LvglLockGuard lock;
 
+    // Warm reboot (swipe-up home) must land on the launcher so Setup is reachable.
+    // Only auto-enter AI face on a normal cold-boot path.
+    const bool from_warm_reboot = GetHAL().getWarmRebootTarget() >= 0;
+
     if (!_startup_checked && GetHAL().consumeAppSetupRequest()) {
         mclog::tagInfo(getAppInfo().name, "network setup requested; starting Xiaozhi SoftAP provisioning");
         _startup_checked = true;
@@ -34,6 +38,11 @@ void AppLauncher::onLauncherOpen()
     } else if (!_startup_checked && !GetHAL().isAppConfiged()) {
         mclog::tagInfo(getAppInfo().name, "app not configured; starting Xiaozhi SoftAP provisioning");
         _startup_checked = true;
+        GetHAL().requestXiaozhiStart();
+    } else if (!_startup_checked && !from_warm_reboot && GetHAL().getXiaozhiConfig().startAiAgentOnBoot) {
+        mclog::tagInfo(getAppInfo().name, "start AI agent on boot");
+        _startup_checked = true;
+        GetHAL().clearWarmRebootRequest();
         GetHAL().requestXiaozhiStart();
     } else {
         create_launcher_view();

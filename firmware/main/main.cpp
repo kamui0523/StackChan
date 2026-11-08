@@ -27,7 +27,9 @@ extern "C" void app_main(void)
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
     ui_hal::on_get_tick([]() { return GetHAL().millis(); });
 
-    const bool skip_mooncake = GetHAL().getXiaozhiConfig().startAiAgentOnBoot && GetHAL().getWarmRebootTarget() < 0;
+    // StackChan cold-boots straight into the AI face. Mooncake launcher is only
+    // used after a warm reboot (e.g. returning from Setup / other apps).
+    const bool skip_mooncake = GetHAL().getWarmRebootTarget() < 0;
 
     if (!skip_mooncake) {
         // Install apps
