@@ -71,6 +71,16 @@ public:
     virtual int getCurrentAngle();
 
     /**
+     * @brief Read present position from hardware (tenths of a degree).
+     *        Returns false if the bus read is invalid.
+     */
+    virtual bool readHardwareAngle(int& angle_tenths)
+    {
+        angle_tenths = getCurrentAngle();
+        return true;
+    }
+
+    /**
      * @brief
      *
      * @return uitk::Vector2i

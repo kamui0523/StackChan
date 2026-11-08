@@ -338,6 +338,7 @@ void StackChanAvatarDisplay::StopSpeakingModifier()
         stackchan.avatar().mouth().setWeight(0);
     }
     // Restore default servo control policy after speech.
+    stackchan.motion().setModifyLock(false);
     stackchan.motion().setAutoAngleSyncEnabled(true);
     stackchan.motion().setAutoTorqueReleaseEnabled(true);
     is_speaking_presentation_ = false;

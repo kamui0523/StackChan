@@ -76,43 +76,59 @@ public:
         int mapped_angle = _zero_pos + angle * 16 / 5 / 10;  // 一步对应 0.3125度, 0.3125 = 5/16
         mapped_angle     = uitk::clamp(mapped_angle, _runtime_raw_pos_limit.x, _runtime_raw_pos_limit.y);
 
-        // mclog::tagInfo(_tag, "id: {} mapped angle: {}", _id, mapped_angle);
+        // Skip no-op writes to keep the servo UART quiet (helps TTS smoothness).
+        if (_has_last_cmd && mapped_angle == _last_cmd_raw_pos) {
+            return;
+        }
 
         if (update_stall_protection(mapped_angle)) {
             return;
         }
 
+        // Stream spring samples with Time=0 + Speed (how FTServo test tools track
+        // smoothly). Timed WritePos every 20ms fights itself and looks stuttery.
+        const int delta = _has_last_cmd ? abs_int(mapped_angle - _last_cmd_raw_pos) : 16;
+        const uint16_t speed = static_cast<uint16_t>(uitk::clamp(300 + delta * 50, 300, 1500));
+
+        if (!_torque_cmd_on) {
+            _scs_bus.EnableTorque(_config.id, 1);
+            _torque_cmd_on = true;
+            Servo::setTorqueEnabled(true);
+        }
+
         check_mode(Mode::Position);
-        _scs_bus.WritePos(_config.id, mapped_angle, 20, 0);
+        _scs_bus.WritePos(_config.id, mapped_angle, 0, speed);
+        _last_cmd_raw_pos = mapped_angle;
+        _has_last_cmd     = true;
     }
 
     int getCurrentAngle() override
     {
-        int current_pos = _scs_bus.ReadPos(_config.id);
-        if (!is_raw_pos_valid(current_pos)) {
-            int fallback_angle = uitk::clamp(Servo::getCurrentAngle(), getAngleLimit().x, getAngleLimit().y);
-            mclog::tagWarn(_tag, "id: {} ignore invalid current pos: {}, fallback angle: {}", _config.id, current_pos,
-                           fallback_angle);
-            return fallback_angle;
-        }
+        // Use the animated angle for control loops. Reading present position over
+        // UART every frame makes head motion stutter and starves the audio task.
+        return Servo::getCurrentAngle();
+    }
 
-        int angle = raw_pos_to_angle(current_pos);
-        angle     = uitk::clamp(angle, getAngleLimit().x, getAngleLimit().y);
-        // mclog::tagInfo(_tag, "id: {} current pos: {} angle: {}", _id, current_pos, angle);
-        return angle;
+    bool readHardwareAngle(int& angle_tenths) override
+    {
+        const int current_pos = _scs_bus.ReadPos(_config.id);
+        if (!is_raw_pos_valid(current_pos)) {
+            return false;
+        }
+        angle_tenths = raw_pos_to_angle(current_pos);
+        return true;
     }
 
     bool is_moving_impl() override
     {
-        int moving = _scs_bus.ReadMove(_config.id);
-        // mclog::tagInfo(_tag, "id: {} moving: {}", _id, moving);
-        return moving != 0;
+        return false;
     }
 
     void setTorqueEnabled(bool enabled) override
     {
         Servo::setTorqueEnabled(enabled);
         _scs_bus.EnableTorque(_config.id, enabled ? 1 : 0);
+        _torque_cmd_on = enabled;
         // mclog::tagInfo(_tag, "id: {} set torque: {}", _id, enabled);
     }
 
@@ -174,7 +190,8 @@ private:
     int _zero_pos      = 0;
     Mode _current_mode = Mode::Position;
 
-    static constexpr uint32_t kStallFeedbackIntervalMs = 50;
+    // Stall feedback does a full UART round-trip; keep it sparse so TTS stays smooth.
+    static constexpr uint32_t kStallFeedbackIntervalMs = 250;
     static constexpr int kStallMinTargetDeltaRaw       = 8;
     static constexpr int kStallMaxPositionDeltaRaw     = 1;
     static constexpr int kStallCurrentRiseThreshold    = 80;
@@ -190,6 +207,9 @@ private:
     int _last_stall_direction       = 0;
     int _stall_confirm_count        = 0;
     bool _last_stall_feedback_valid = false;
+    int _last_cmd_raw_pos           = 0;
+    bool _has_last_cmd              = false;
+    bool _torque_cmd_on             = false;
 
     static int abs_int(int value)
     {

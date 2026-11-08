@@ -8,10 +8,31 @@
 #include <mcp_server.h>
 #include <stackchan/stackchan.h>
 #include <apps/common/common.h>
+#include <esp_timer.h>
 
 using namespace stackchan;
 
 static const std::string_view _tag = "HAL-MCP";
+static esp_timer_handle_t _head_angle_feedback_timer = nullptr;
+
+static void log_head_angle_feedback(void* /*arg*/)
+{
+    LvglLockGuard lock;
+    auto& motion = GetStackChan().motion();
+
+    int yaw_hw = 0;
+    int pitch_hw = 0;
+    const bool yaw_ok = motion.yawServo().readHardwareAngle(yaw_hw);
+    const bool pitch_ok = motion.pitchServo().readHardwareAngle(pitch_hw);
+
+    mclog::tagInfo(_tag,
+                   "motion feedback: target_yaw={}({}°) target_pitch={}({}°) "
+                   "hw_yaw={}({}°) hw_pitch={}({}°) ok=[{},{}]",
+                   motion.yawServo().getCurrentAngle(), motion.yawServo().getCurrentAngle() / 10,
+                   motion.pitchServo().getCurrentAngle(), motion.pitchServo().getCurrentAngle() / 10,
+                   yaw_ok ? yaw_hw : -9999, yaw_ok ? yaw_hw / 10 : -9999,
+                   pitch_ok ? pitch_hw : -9999, pitch_ok ? pitch_hw / 10 : -9999, yaw_ok, pitch_ok);
+}
 
 void Hal::xiaozhi_mcp_init()
 {
@@ -59,16 +80,43 @@ void Hal::xiaozhi_mcp_init()
                            LvglLockGuard lock;
 
                            auto& motion = GetStackChan().motion();
+                           // Hold intentional pose: pause speaking wander + keep torque on.
+                           motion.setModifyLock(true);
+                           motion.setAutoTorqueReleaseEnabled(false);
+                           motion.setTorqueEnabled(true);
+
+                           const int yaw_tenths = (yaw != -9999) ? yaw * 10 : motion.yawServo().getCurrentAngle();
+                           const int pitch_tenths =
+                               (pitch != -9999) ? pitch * 10 : motion.pitchServo().getCurrentAngle();
+
                            if (pitch != -9999) {
-                               motion.pitchServo().moveWithSpeed(pitch * 10, speed);
+                               motion.pitchServo().moveWithSpeed(pitch_tenths, speed);
                            }
                            if (yaw != -9999) {
-                               motion.yawServo().moveWithSpeed(yaw * 10, speed);
+                               motion.yawServo().moveWithSpeed(yaw_tenths, speed);
+                           }
+
+                           mclog::tagInfo(_tag,
+                                          "motion set_angles applied: cmd_yaw={}({}°) cmd_pitch={}({}°) locked=1",
+                                          yaw_tenths, yaw_tenths / 10, pitch_tenths, pitch_tenths / 10);
+                           if (_head_angle_feedback_timer == nullptr) {
+                               const esp_timer_create_args_t args = {
+                                   .callback = &log_head_angle_feedback,
+                                   .arg = nullptr,
+                                   .dispatch_method = ESP_TIMER_TASK,
+                                   .name = "head_ang_fb",
+                                   .skip_unhandled_events = true,
+                               };
+                               esp_timer_create(&args, &_head_angle_feedback_timer);
+                           }
+                           if (_head_angle_feedback_timer != nullptr) {
+                               esp_timer_stop(_head_angle_feedback_timer);
+                               // Read hardware present position after the move settles.
+                               esp_timer_start_once(_head_angle_feedback_timer, 700 * 1000);
                            }
 
                            return true;
                        });
-
     mclog::tagInfo(_tag, "add robot.set_led_color tool");
     mcp_server.AddTool(
         "self.robot.set_led_color",

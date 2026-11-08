@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "servo.h"
+#include <cmath>
 #include <hal/hal.h>
 
 using namespace uitk;
@@ -55,12 +56,11 @@ void Servo::update()
         set_angle_impl(_angle_anim.end);
     }
 
-    // Auto release torque on rest
-    else if (_auto_torque_release_enabled && !isMoving()) {
-        if (GetHAL().millis() - _last_torque_check_tick > 200) {
-            if (getTorqueEnabled()) {
-                setTorqueEnabled(false);
-            }
+    // Auto release torque on rest.
+    // Avoid UART reads here — getTorqueEnabled()/is_moving_impl() stall audio.
+    else if (_auto_torque_release_enabled) {
+        if (GetHAL().millis() - _last_torque_check_tick > 500) {
+            setTorqueEnabled(false);
             _last_torque_check_tick = GetHAL().millis();
         }
     }
@@ -94,7 +94,8 @@ int Servo::getCurrentAngle()
 
 bool Servo::isMoving()
 {
-    return _angle_anim.done() == false || is_moving_impl();
+    // Anim-only: hardware ReadMove() over the servo UART causes audible audio stutter.
+    return _angle_anim.done() == false;
 }
 
 void Servo::apply_default_spring_options()
@@ -127,17 +128,14 @@ uitk::SpringOptions_t Servo::map_speed_to_spring_options(int speed)
 {
     speed = uitk::clamp(speed, 0, 1000);
 
-    // 1. 计算 Stiffness (刚度)
-    // 使用二次方映射: k = k_min + (speed/1000)^2 * k_range
-    // 当 speed=500 时，k 约为 10 + 0.25 * 640 = 170
-    float k_min           = 10.0f;
-    float k_max           = 650.0f;
+    // Linear stiffness map so mid speeds (e.g. MCP 150) stay snappy.
+    // Old quadratic map made speed=150 ≈ k=24 (molasses).
+    float k_min           = 120.0f;
+    float k_max           = 900.0f;
     float normalizedSpeed = speed / 1000.0f;
-    float stiffness       = k_min + (normalizedSpeed * normalizedSpeed) * (k_max - k_min);
+    float stiffness       = k_min + normalizedSpeed * (k_max - k_min);
 
-    // 2. 计算 Damping (阻尼)
-    // 为了保持临界阻尼(无过冲，最快稳定)，公式为 d = 2 * sqrt(m * k)
-    // 如果想要带一点点弹性感(bounce)，可以将系数从 2.0 降到 1.5~1.8
+    // Critical damping: d = 2 * sqrt(m * k)
     float mass    = 1.0f;
     float damping = 2.0f * sqrtf(mass * stiffness);
 
