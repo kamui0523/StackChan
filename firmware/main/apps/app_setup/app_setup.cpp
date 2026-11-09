@@ -11,6 +11,7 @@
 #include <assets/assets.h>
 #include <stackchan/stackchan.h>
 #include <apps/common/common.h>
+#include <ssid_manager.h>
 
 using namespace mooncake;
 using namespace view;
@@ -48,9 +49,11 @@ void AppSetup::onOpen()
             "Wi-Fi",
             {{"Change Wi-Fi",
               [&]() {
-                  _destroy_menu    = true;
-                  _need_warm_reset = true;
-                  _worker          = std::make_unique<WifiSetupWorker>();
+                  // SoftAP / browser provisioning — no StackChan World App / BLE bind.
+                  // Clears saved SSIDs only; Xiaozhi account binding is left intact.
+                  mclog::tagInfo(getAppInfo().name, "Change Wi-Fi: SoftAP reprovision (skip BLE App)");
+                  SsidManager::GetInstance().Clear();
+                  GetHAL().requestAppSetup();
               }},
              {"Testing service",
               [&]() {

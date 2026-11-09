@@ -95,7 +95,7 @@ Confirm on the serial log: `Received goodbye message` means the cloud ended the 
 After the device returns to **standby/idle**, firmware can show the **Sleepy** face and
 speech bubble `Zzz…` without waiting for a cloud emotion.
 
-**Defaults (stack_chan 1.0.2)**
+**Defaults (stack_chan 1.0.2.1)**
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -123,6 +123,16 @@ Then rebuild and flash. Values also live in `sdkconfig.defaults`.
 - This is independent of cloud 「进入睡觉模式」 emotion handling.
 
 ## Update history
+
+### stack_chan 1.0.2.1（2026-11-09）
+
+- **Change Wi-Fi SoftAP（换网 SoftAP）**: Setup → Change Wi-Fi 清已存 SSID 后走 SoftAP /
+  浏览器配网，不再依赖 StackChan World App / BLE 绑定（小智账号绑定保留）。
+- **TTS after MCP（工具调用后有字幕无声）**: `tts start` 立即开门接收 Opus，避免 MCP /
+  Tavily 等长等待后突发 TTS 帧在 Speaking 状态切换前被丢弃。
+- **Standby sleepy（待机瞌睡表情）**: idle/standby 约 30 秒后显示 Sleepy + `Zzz…`
+  （`CONFIG_STACKCHAN_STANDBY_SLEEPY_AFTER_SEC`）；摸头 / 晃醒后先回 Neutral，再约 15 秒
+  重新 Sleepy（`CONFIG_STACKCHAN_STANDBY_SLEEPY_AFTER_INTERACTION_SEC`）。
 
 ### stack_chan 1.0.2（2026-11-09）
 

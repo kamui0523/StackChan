@@ -1,5 +1,5 @@
 diff --git a/main/application.cc b/main/application.cc
-index 31de205..25ead4f 100644
+index 31de205..8ffb5c4 100644
 --- a/main/application.cc
 +++ b/main/application.cc
 @@ -440,6 +440,9 @@ void Application::CheckAssetsVersion() {
@@ -39,7 +39,39 @@ index 31de205..25ead4f 100644
          ota_->MarkCurrentVersionValid();
          if (!ota_->HasActivationCode() && !ota_->HasActivationChallenge()) {
              // Exit the loop if done checking new version
-@@ -833,6 +835,7 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
+@@ -552,7 +554,13 @@ void Application::InitializeProtocol() {
+     });
+ 
+     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
+-        if (GetDeviceState() == kDeviceStateSpeaking) {
++        // Accept frames as soon as tts start arrives — not only after Schedule()
++        // flips the device state. Long MCP/tool waits often burst Opus right after
++        // the JSON start, and those packets were previously discarded.
++        if (aborted_) {
++            return;
++        }
++        if (GetDeviceState() == kDeviceStateSpeaking || tts_audio_gate_.load()) {
+             audio_service_.PushPacketToDecodeQueue(std::move(packet));
+         }
+     });
+@@ -622,11 +630,15 @@ void Application::InitializeProtocol() {
+                 return;
+             }
+             if (strcmp(state->valuestring, "start") == 0) {
++                // Open the audio gate synchronously so binary frames that arrive
++                // before the scheduled state change are not dropped.
++                aborted_ = false;
++                tts_audio_gate_.store(true);
+                 Schedule([this]() {
+-                    aborted_ = false;
+                     SetDeviceState(kDeviceStateSpeaking);
+                 });
+             } else if (strcmp(state->valuestring, "stop") == 0) {
++                tts_audio_gate_.store(false);
+                 Schedule([this]() {
+                     if (GetDeviceState() == kDeviceStateSpeaking) {
+                         if (listening_mode_ == kListeningModeManualStop) {
+@@ -833,6 +845,7 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
          if (!protocol_->OpenAudioChannel()) {
              // Return to idle so the device is not stuck in the connecting
              // state (not every failure path reports a network error)
@@ -47,7 +79,7 @@ index 31de205..25ead4f 100644
              SetDeviceState(kDeviceStateIdle);
              return;
          }
-@@ -970,6 +973,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
+@@ -970,6 +983,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
              // Return to idle so the device is not stuck in the connecting
              // state (not every failure path reports a network error), and
              // wake word detection is re-enabled by the idle state handler.
@@ -55,6 +87,37 @@ index 31de205..25ead4f 100644
              SetDeviceState(kDeviceStateIdle);
              return;
          }
+@@ -1175,6 +1189,7 @@ void Application::Schedule(std::function<void()>&& callback) {
+ void Application::AbortSpeaking(AbortReason reason) {
+     ESP_LOGI(TAG, "Abort speaking");
+     aborted_ = true;
++    tts_audio_gate_.store(false);
+     if (protocol_) {
+         protocol_->SendAbortSpeaking(reason);
+     }
+diff --git a/main/application.h b/main/application.h
+index f2b9a00..e1d5404 100644
+--- a/main/application.h
++++ b/main/application.h
+@@ -12,6 +12,7 @@
+ #include <memory>
+ #include <functional>
+ #include <cstdint>
++#include <atomic>
+ #include <vector>
+ 
+ #include "protocol.h"
+@@ -148,6 +149,10 @@ private:
+ 
+     bool has_server_time_ = false;
+     bool aborted_ = false;
++    // tts "start" is handled via Schedule(), so Speaking state lags the WS callback.
++    // Gate early Opus frames so MCP/tool-latency bursts are not dropped while
++    // the main loop still shows Listening (subtitle-only / silent playback).
++    std::atomic<bool> tts_audio_gate_{false};
+     bool assets_version_checked_ = false;
+     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
+     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
 diff --git a/main/boards/common/esp_video.cc b/main/boards/common/esp_video.cc
 index 2f31a49..4cf6f63 100644
 --- a/main/boards/common/esp_video.cc
