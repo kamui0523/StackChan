@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "music": {
+      "type": "stdio",
+      "namespace": "music",
+      "command": "python",
+      "args": ["-m", "music_mcp"],
+      "cwd": "/ABS/PATH/TO/xiaozhi-mcp-music",
+      "env": {
+        "LOCAL_PLAYER": "mpv",
+        "AUTO_PLAY_LOCAL": "true",
+        "MUSIC_SOURCES": "kuwo,netease,migu,kugou"
+      },
+      "disabled": false
+    },
+    "homeassistant": {
+      "type": "http",
+      "namespace": "ha",
+      "url": "http://homeassistant.local:8123/api/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_HA_LONG_LIVED_TOKEN"
+      },
+      "disabled": false
+    }
+  }
+}
