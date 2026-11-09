@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "stackchan_display.h"
+#include "sdkconfig.h"
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_lvgl_port.h>
@@ -22,6 +23,10 @@ using namespace stackchan;
 using namespace stackchan::avatar;
 
 #define TAG "StackChanAvatarDisplay"
+
+static bool _is_xiaozhi_ready = false;
+static bool _is_xiaozhi_idle  = false;
+static StackChanAvatarDisplay* s_stackchan_display = nullptr;
 
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 LV_FONT_DECLARE(BUILTIN_ICON_FONT);
@@ -69,11 +74,17 @@ void StackChanAvatarDisplay::InitializeLcdThemes()
     theme_manager.RegisterTheme("dark", dark_theme);
 }
 
+StackChanAvatarDisplay* StackChanAvatarDisplay::Instance()
+{
+    return s_stackchan_display;
+}
+
 StackChanAvatarDisplay::StackChanAvatarDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
                                                int width, int height, int offset_x, int offset_y, bool mirror_x,
                                                bool mirror_y, bool swap_xy)
     : LvglDisplay(), panel_io_(panel_io), panel_(panel)
 {
+    s_stackchan_display = this;
     width_  = width;
     height_ = height;
 
@@ -179,6 +190,19 @@ StackChanAvatarDisplay::StackChanAvatarDisplay(esp_lcd_panel_io_handle_t panel_i
     };
     esp_timer_create(&preview_timer_args, &preview_timer_);
 
+    esp_timer_create_args_t sleepy_timer_args = {
+        .callback =
+            [](void* arg) {
+                auto* display = static_cast<StackChanAvatarDisplay*>(arg);
+                display->EnterStandbySleepy();
+            },
+        .arg                   = this,
+        .dispatch_method       = ESP_TIMER_TASK,
+        .name                  = "standby_sleepy",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_create(&sleepy_timer_args, &standby_sleepy_timer_);
+
     // Create boot logo label if not warm boot
     if (GetHAL().getWarmRebootTarget() < 0) {
         ESP_LOGI(TAG, "Create boot logo label");
@@ -198,6 +222,16 @@ StackChanAvatarDisplay::~StackChanAvatarDisplay()
 {
     ESP_LOGI(TAG, "Destroying StackChanAvatarDisplay");
 
+    if (s_stackchan_display == this) {
+        s_stackchan_display = nullptr;
+    }
+
+    CancelStandbySleepyTimer();
+    if (standby_sleepy_timer_ != nullptr) {
+        esp_timer_delete(standby_sleepy_timer_);
+        standby_sleepy_timer_ = nullptr;
+    }
+
     if (preview_timer_ != nullptr) {
         esp_timer_stop(preview_timer_);
         esp_timer_delete(preview_timer_);
@@ -210,6 +244,71 @@ StackChanAvatarDisplay::~StackChanAvatarDisplay()
     auto& stackchan = GetStackChan();
     if (stackchan.hasAvatar()) {
         stackchan.resetAvatar();
+    }
+}
+
+void StackChanAvatarDisplay::CancelStandbySleepyTimer()
+{
+    if (standby_sleepy_timer_ != nullptr) {
+        esp_timer_stop(standby_sleepy_timer_);
+    }
+}
+
+void StackChanAvatarDisplay::ArmStandbySleepyTimer(int delay_sec)
+{
+    CancelStandbySleepyTimer();
+    int sec = delay_sec;
+    if (sec < 0) {
+        sec = CONFIG_STACKCHAN_STANDBY_SLEEPY_AFTER_SEC;
+    }
+    if (sec <= 0 || standby_sleepy_timer_ == nullptr) {
+        return;
+    }
+    const uint64_t delay_us = static_cast<uint64_t>(sec) * 1000000ULL;
+    esp_err_t err = esp_timer_start_once(standby_sleepy_timer_, delay_us);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to arm standby sleepy timer: %s", esp_err_to_name(err));
+        return;
+    }
+    ESP_LOGI(TAG, "Standby sleepy in %d s", sec);
+}
+
+void StackChanAvatarDisplay::EnterStandbySleepy()
+{
+    DisplayLockGuard lock(this);
+    if (!_is_xiaozhi_idle || is_sleeping_) {
+        return;
+    }
+    ESP_LOGI(TAG, "Standby timeout → sleepy");
+    ApplyEmotionNow("sleepy");
+}
+
+void StackChanAvatarDisplay::NudgeAfterIdleInteraction()
+{
+    DisplayLockGuard lock(this);
+    if (!_is_xiaozhi_idle) {
+        return;
+    }
+    // Leave sleepy visuals; treat the touch/shake as a short awake window.
+    ApplyEmotionNow("neutral");
+    GetStackChan().avatar().clearSpeech();
+    int delay_sec = CONFIG_STACKCHAN_STANDBY_SLEEPY_AFTER_INTERACTION_SEC;
+    if (delay_sec <= 0) {
+        delay_sec = CONFIG_STACKCHAN_STANDBY_SLEEPY_AFTER_SEC;
+    }
+    ArmStandbySleepyTimer(delay_sec);
+}
+
+void StackChanAvatarDisplay::SetPowerSaveMode(bool on)
+{
+    // Keep StackChan sleepy/Zzz path (not only generic LVGL emoji).
+    if (on) {
+        SetChatMessage("system", "");
+        SetEmotion("sleepy");
+    } else {
+        CancelStandbySleepyTimer();
+        SetChatMessage("system", "");
+        SetEmotion("neutral");
     }
 }
 
@@ -414,18 +513,25 @@ void StackChanAvatarDisplay::ApplyEmotionNow(const char* emotion)
 
     auto& avatar = stackchan.avatar();
 
+    auto leave_sleep = [&]() {
+        if (is_sleeping_) {
+            avatar.clearSpeech();
+            is_sleeping_ = false;
+        }
+    };
+
     if (strcmp(emotion, "neutral") == 0) {
+        leave_sleep();
         avatar.setEmotion(Emotion::Neutral);
-        is_sleeping_ = false;
     } else if (strcmp(emotion, "happy") == 0 || strcmp(emotion, "laughing") == 0) {
+        leave_sleep();
         avatar.setEmotion(Emotion::Happy);
-        is_sleeping_ = false;
     } else if (strcmp(emotion, "angry") == 0) {
+        leave_sleep();
         avatar.setEmotion(Emotion::Angry);
-        is_sleeping_ = false;
     } else if (strcmp(emotion, "sad") == 0 || strcmp(emotion, "crying") == 0) {
+        leave_sleep();
         avatar.setEmotion(Emotion::Sad);
-        is_sleeping_ = false;
     } else if (strcmp(emotion, "sleepy") == 0) {
         avatar.setEmotion(Emotion::Sleepy);
         avatar.setSpeech("Zzz…");
@@ -443,12 +549,12 @@ void StackChanAvatarDisplay::ApplyEmotionNow(const char* emotion)
 
         stackchan.motion().pitchServo().moveWithSpeed(0, 80);
     } else if (strcmp(emotion, "doubtful") == 0) {
+        leave_sleep();
         avatar.setEmotion(Emotion::Doubt);
-        is_sleeping_ = false;
     } else {
         ESP_LOGW(TAG, "Unknown emotion: %s, using NEUTRAL", emotion);
+        leave_sleep();
         avatar.setEmotion(Emotion::Neutral);
-        is_sleeping_ = false;
     }
 
     ResyncBlinkModifier();
@@ -610,8 +716,6 @@ void StackChanAvatarDisplay::SetTheme(Theme* theme)
 }
 
 #include <hal/board/hal_bridge.h>
-static bool _is_xiaozhi_ready = false;
-static bool _is_xiaozhi_idle  = false;
 bool hal_bridge::is_xiaozhi_ready()
 {
     return _is_xiaozhi_ready;
@@ -619,6 +723,12 @@ bool hal_bridge::is_xiaozhi_ready()
 bool hal_bridge::is_xiaozhi_idle()
 {
     return _is_xiaozhi_idle;
+}
+void hal_bridge::nudge_after_idle_interaction()
+{
+    if (auto* display = StackChanAvatarDisplay::Instance()) {
+        display->NudgeAfterIdleInteraction();
+    }
 }
 
 void StackChanAvatarDisplay::SetStatus(const char* status)
@@ -700,12 +810,23 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
             stackchan.removeModifier(idle_motion_modifier_id_);
             idle_motion_modifier_id_ = -1;
         }
-        if (idle_expression_modifier_id_ < 0) {
-            idle_expression_modifier_id_ = stackchan.addModifier(std::make_unique<IdleExpressionModifier>());
-        }
 
         _is_xiaozhi_idle = true;
+        if (is_sleeping_) {
+            // Already in standby-sleepy: keep face, don't fight with idle micro-expr.
+            if (idle_expression_modifier_id_ >= 0) {
+                stackchan.removeModifier(idle_expression_modifier_id_);
+                idle_expression_modifier_id_ = -1;
+            }
+        } else {
+            if (idle_expression_modifier_id_ < 0) {
+                idle_expression_modifier_id_ = stackchan.addModifier(std::make_unique<IdleExpressionModifier>());
+            }
+            // Arm after idle flag is set so the callback won't no-op.
+            ArmStandbySleepyTimer();
+        }
     } else {
+        CancelStandbySleepyTimer();
         ESP_LOGW(TAG, "Stop idle expression");
         if (idle_motion_modifier_id_ >= 0) {
             stackchan.removeModifier(idle_motion_modifier_id_);
@@ -714,6 +835,11 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
         if (idle_expression_modifier_id_ >= 0) {
             stackchan.removeModifier(idle_expression_modifier_id_);
             idle_expression_modifier_id_ = -1;
+        }
+
+        // Wake word / listen / speak: leave standby Sleepy+Zzz.
+        if (is_sleeping_) {
+            ApplyEmotionNow("neutral");
         }
 
         _is_xiaozhi_idle = false;

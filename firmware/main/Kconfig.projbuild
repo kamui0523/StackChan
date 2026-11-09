@@ -20,6 +20,24 @@ config STACKCHAN_SPEECH_SUBTITLES
         When enabled, assistant TTS text appears in the on-screen speech bubble.
         Disable for face-only speaking (no captions). Rebuild/flash to toggle.
 
+config STACKCHAN_STANDBY_SLEEPY_AFTER_SEC
+    int "Enter sleepy face after standby (seconds)"
+    range 0 3600
+    default 30
+    help
+        After the device returns to standby/idle, wait this many seconds then
+        show the Sleepy expression and "Zzz…". Set 0 to disable. Wake word or
+        any non-standby status cancels the timer.
+
+config STACKCHAN_STANDBY_SLEEPY_AFTER_INTERACTION_SEC
+    int "Re-enter sleepy after head-pet/shake while idle (seconds)"
+    range 0 3600
+    default 15
+    help
+        After a physical interaction (head pet / shake) ends during standby,
+        return to a normal idle face and wait this many seconds before sleepy
+        again. Set 0 to use the same delay as STACKCHAN_STANDBY_SLEEPY_AFTER_SEC.
+
 endmenu
 
 menu "Xiaozhi Assistant"

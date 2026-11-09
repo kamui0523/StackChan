@@ -31,6 +31,7 @@ private:
 
     lv_obj_t* preview_image_                         = nullptr;
     esp_timer_handle_t preview_timer_                = nullptr;
+    esp_timer_handle_t standby_sleepy_timer_         = nullptr;
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
 
     void CreateIdleMotionModifier();
@@ -41,6 +42,9 @@ private:
     void ResyncBlinkModifier();
     void StopSpeakingModifier();
     void BeginSpeakingPresentation();
+    void ArmStandbySleepyTimer(int delay_sec = -1);
+    void CancelStandbySleepyTimer();
+    void EnterStandbySleepy();
 
 protected:
     virtual bool Lock(int timeout_ms = 0) override;
@@ -62,9 +66,14 @@ public:
     virtual void SetupUI() override;
     virtual void SetTheme(Theme* theme) override;
     virtual void SetStatus(const char* status) override;
+    virtual void SetPowerSaveMode(bool on) override;
     virtual void ShowNotification(const char* notification, int duration_ms = 3000) override;
 
     void LvglLock();
     void LvglUnlock();
     lv_disp_t* GetLvglDisplay();
+
+    static StackChanAvatarDisplay* Instance();
+    // After pet/dizzy while idle: Neutral + shorter sleepy re-arm.
+    void NudgeAfterIdleInteraction();
 };

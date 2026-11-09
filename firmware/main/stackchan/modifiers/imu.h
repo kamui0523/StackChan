@@ -5,7 +5,9 @@
  */
 #pragma once
 #include "../modifiable.h"
+#include "../avatar/avatar/elements/emotion.h"
 #include <hal/hal.h>
+#include <hal/board/hal_bridge.h>
 #include <cstdint>
 
 namespace stackchan {
@@ -75,6 +77,9 @@ private:
             _is_reacting = true;
 
             auto& avatar = stackchan.avatar();
+            _was_sleepy  = (avatar.getEmotion() == avatar::Emotion::Sleepy);
+            // 清掉 Sleepy 的 Zzz，避免眩晕装饰还挂着气泡
+            avatar.clearSpeech();
 
             avatar.setModifyLock(true);
             avatar.leftEye().setVisible(false);
@@ -113,6 +118,13 @@ private:
         _dizzy_decorator_id = -1;
         _shy_decorator_id   = -1;
 
+        if (_was_sleepy) {
+            avatar.setEmotion(avatar::Emotion::Neutral);
+            avatar.clearSpeech();
+            hal_bridge::nudge_after_idle_interaction();
+        }
+        _was_sleepy = false;
+
         auto& motion = stackchan.motion();
         motion.setModifyLock(false);
 
@@ -126,6 +138,7 @@ private:
     // 状态控制
     bool _is_reacting          = false;
     bool _toggle_phase         = false;
+    bool _was_sleepy           = false;
     uint32_t _restore_at       = 0;
     uint32_t _next_toggle_tick = 0;
     uint32_t _reaction_duration_ms;

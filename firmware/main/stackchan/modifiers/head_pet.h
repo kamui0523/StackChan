@@ -9,6 +9,7 @@
 #include "../utils/random.h"
 #include <smooth_ui_toolkit.hpp>
 #include <hal/hal.h>
+#include <hal/board/hal_bridge.h>
 #include <cstdint>
 #include <memory>
 
@@ -79,8 +80,9 @@ private:
             _prev_pitch     = angles.y;
         }
 
-        // 视觉反馈
+        // 视觉反馈（清掉 Sleepy 的 Zzz，避免开心脸还挂着气泡）
         avatar.setEmotion(avatar::Emotion::Happy);
+        avatar.clearSpeech();
 
         // 添加爱心装饰
         int duration = Random::getInstance().getInt(1500, 2500);
@@ -100,7 +102,14 @@ private:
             return;
         }
 
-        stackchan.avatar().setEmotion(_prev_emotion);
+        if (_prev_emotion == avatar::Emotion::Sleepy) {
+            // Back to normal idle; re-arm a shorter sleepy timer.
+            stackchan.avatar().setEmotion(avatar::Emotion::Neutral);
+            stackchan.avatar().clearSpeech();
+            hal_bridge::nudge_after_idle_interaction();
+        } else {
+            stackchan.avatar().setEmotion(_prev_emotion);
+        }
         stackchan.motion().moveWithSpeed(_prev_yaw, _prev_pitch, 200);
 
         _in_happy_state = false;

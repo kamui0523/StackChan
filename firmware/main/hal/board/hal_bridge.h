@@ -50,6 +50,8 @@ void xiaozhi_board_init();
 void start_xiaozhi_app();
 bool is_xiaozhi_ready();
 bool is_xiaozhi_idle();
+/** Idle/sleepy interrupted by head-pet or shake: neutral face + re-arm sleepy timer. */
+void nudge_after_idle_interaction();
 XiaozhiConfig_t get_xiaozhi_config();
 void set_xiaozhi_config(const XiaozhiConfig_t& config);
 
